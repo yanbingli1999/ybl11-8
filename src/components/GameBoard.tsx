@@ -74,13 +74,28 @@ export const GameBoard: React.FC<GameBoardProps> = ({ game }) => {
 
   const getTileContent = (tile: any, x: number, y: number) => {
     const isPlayer = player.position.x === x && player.position.y === y;
-    
+
     if (isPlayer) {
       return <span style={{ zIndex: 10 }}>🧙</span>;
     }
 
     if (!tile.visible && !tile.explored) {
       return null;
+    }
+
+    if (room.guardian && room.guardian.visible && room.guardian.position.x === x && room.guardian.position.y === y) {
+      const gState = room.guardian.state;
+      if (gState === 'chasing') return <span style={{ zIndex: 9 }}>👹</span>;
+      if (gState === 'ambushing') return <span style={{ zIndex: 9 }}>👁️</span>;
+      if (gState === 'investigating') return <span style={{ zIndex: 9 }}>🐕</span>;
+      return <span style={{ zIndex: 9 }}>👹</span>;
+    }
+
+    const lure = room.scentLures.find(
+      (l) => l.position.x === x && l.position.y === y && l.turnsRemaining > 0
+    );
+    if (lure && tile.visible) {
+      return <span style={{ zIndex: 8, opacity: 0.8 }}>🧴</span>;
     }
 
     const trap = room.traps.find(

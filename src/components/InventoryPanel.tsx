@@ -5,14 +5,18 @@ interface InventoryPanelProps {
   inventory: InventoryItem[];
   onAppraise: (itemId: string) => void;
   onDrop: (itemId: string) => void;
+  onUseLure: (itemId: string) => void;
   canAppraise: boolean;
+  hasGuardian: boolean;
 }
 
 export const InventoryPanel: React.FC<InventoryPanelProps> = ({
   inventory,
   onAppraise,
   onDrop,
+  onUseLure,
   canAppraise,
+  hasGuardian,
 }) => {
   const [selectedItem, setSelectedItem] = useState<string | null>(null);
 
@@ -130,6 +134,26 @@ export const InventoryPanel: React.FC<InventoryPanelProps> = ({
                 }}
               >
                 🔍 鉴定 (10体力)
+              </button>
+            )}
+            {selectedItemData.appraised && selectedItemData.isGenuine === false && hasGuardian && (
+              <button
+                onClick={() => {
+                  onUseLure(selectedItemData.id);
+                  setSelectedItem(null);
+                }}
+                style={{
+                  flex: 1,
+                  padding: '6px 12px',
+                  backgroundColor: '#7a4aaa',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  fontSize: '12px',
+                }}
+              >
+                🧴 诱饵
               </button>
             )}
             <button

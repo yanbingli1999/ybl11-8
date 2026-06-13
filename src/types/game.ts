@@ -140,6 +140,34 @@ export interface RoomState {
   torches: { position: Position; fuel: number }[];
   entrance: Position;
   exit: Position;
+  guardian: TombGuardian | null;
+  scentLures: ScentLure[];
+  playerHeatmap: number[][];
+}
+
+export type GuardianState = 'patrolling' | 'ambushing' | 'chasing' | 'investigating';
+
+export interface TombGuardian {
+  position: Position;
+  state: GuardianState;
+  patrolRoute: Position[];
+  patrolIndex: number;
+  ambushTarget: Position | null;
+  turnsAtAmbush: number;
+  detectRange: number;
+  chaseSpeed: number;
+  investigateTarget: Position | null;
+  turnsInvestigating: number;
+  turnsSinceLastRecalc: number;
+  visible: boolean;
+}
+
+export interface ScentLure {
+  id: string;
+  position: Position;
+  turnsRemaining: number;
+  strength: number;
+  itemName: string;
 }
 
 export interface ExpeditionRecord {

@@ -6,6 +6,8 @@ import {
   Position,
   Tile,
   InventoryItem,
+  TombGuardian,
+  ScentLure,
 } from '../types/game';
 import { generateRoomTemplate, TUTORIAL_ROOM } from '../data/rooms';
 import { getRandomRelic, RELICS } from '../data/relics';
@@ -92,6 +94,31 @@ function createRoomState(depth: number): RoomState {
     }
   }
 
+  let guardian: TombGuardian | null = null;
+  if (depth >= 3) {
+    const spawnPos = findGuardianSpawnPos(tiles, template.width, template.height, entrance, exit);
+    const detectRange = 3 + Math.floor(depth / 3);
+    const chaseSpeed = depth >= 5 ? 2 : 1;
+    guardian = {
+      position: spawnPos,
+      state: 'patrolling',
+      patrolRoute: [],
+      patrolIndex: 0,
+      ambushTarget: null,
+      turnsAtAmbush: 0,
+      detectRange,
+      chaseSpeed,
+      investigateTarget: null,
+      turnsInvestigating: 0,
+      turnsSinceLastRecalc: 0,
+      visible: false,
+    };
+  }
+
+  const playerHeatmap: number[][] = Array.from({ length: template.height }, () =>
+    Array(template.width).fill(0)
+  );
+
   return {
     templateId: template.id,
     width: template.width,
@@ -104,6 +131,9 @@ function createRoomState(depth: number): RoomState {
     torches,
     entrance,
     exit,
+    guardian,
+    scentLures: [],
+    playerHeatmap,
   };
 }
 
@@ -251,10 +281,17 @@ export function movePlayer(game: GameState, direction: Direction): GameState {
   newGame.player.stamina -= 1;
   newGame.turn += 1;
 
+  updateHeatmap(newGame);
+
   checkTrap(newGame);
   checkRelic(newGame);
   checkEntranceExit(newGame);
   updateVisibility(newGame);
+
+  if (newGame.room.guardian) {
+    updateGuardianTurn(newGame);
+    updateVisibility(newGame);
+  }
 
   if (newGame.player.stamina <= 0) {
     newGame.player.stamina = 0;
@@ -441,6 +478,13 @@ export function updateVisibility(game: GameState) {
         }
       }
     }
+  }
+
+  if (game.room.guardian) {
+    const gx = game.room.guardian.position.x;
+    const gy = game.room.guardian.position.y;
+    const gTile = game.room.tiles[gy]?.[gx];
+    game.room.guardian.visible = !!(gTile && (gTile.visible || gTile.explored));
   }
 }
 
@@ -686,6 +730,386 @@ export function rest(game: GameState): GameState {
   } else {
     newGame.message = '休息片刻，恢复了20点体力。';
   }
+
+  if (newGame.room.guardian) {
+    for (let i = 0; i < 3; i++) {
+      updateGuardianTurn(newGame);
+    }
+  }
+
+  return newGame;
+}
+
+function findGuardianSpawnPos(
+  tiles: Tile[][],
+  width: number,
+  height: number,
+  entrance: Position,
+  exit: Position
+): Position {
+  const candidates: Position[] = [];
+  for (let y = 1; y < height - 1; y++) {
+    for (let x = 1; x < width - 1; x++) {
+      if (tiles[y][x].type === 'floor') {
+        const distToEntrance = Math.abs(x - entrance.x) + Math.abs(y - entrance.y);
+        if (distToEntrance > 4) {
+          candidates.push({ x, y });
+        }
+      }
+    }
+  }
+  if (candidates.length === 0) {
+    for (let y = 1; y < height - 1; y++) {
+      for (let x = 1; x < width - 1; x++) {
+        if (tiles[y][x].type === 'floor') {
+          candidates.push({ x, y });
+        }
+      }
+    }
+  }
+  return candidates[Math.floor(Math.random() * candidates.length)] || { x: width - 2, y: height - 2 };
+}
+
+function updateHeatmap(game: GameState) {
+  const { x, y } = game.player.position;
+  if (game.room.playerHeatmap[y]?.[x] !== undefined) {
+    game.room.playerHeatmap[y][x] += 1;
+  }
+}
+
+function recalculatePatrolRoute(game: GameState): Position[] {
+  const { playerHeatmap, width, height, tiles, scentLures } = game.room;
+  const effectiveHeatmap: number[][] = playerHeatmap.map(row => [...row]);
+
+  for (const lure of scentLures) {
+    const { x, y } = lure.position;
+    const radius = Math.ceil(lure.strength);
+    for (let dy = -radius; dy <= radius; dy++) {
+      for (let dx = -radius; dx <= radius; dx++) {
+        const ny = y + dy;
+        const nx = x + dx;
+        if (ny >= 0 && ny < height && nx >= 0 && nx < width) {
+          const dist = Math.abs(dx) + Math.abs(dy);
+          if (dist <= radius) {
+            effectiveHeatmap[ny][nx] = (effectiveHeatmap[ny][nx] || 0) + lure.strength * (radius - dist + 1);
+          }
+        }
+      }
+    }
+  }
+
+  const hotspots: { pos: Position; heat: number }[] = [];
+  for (let y = 1; y < height - 1; y++) {
+    for (let x = 1; x < width - 1; x++) {
+      if (effectiveHeatmap[y][x] > 0 && tiles[y][x].type !== 'wall' && tiles[y][x].type !== 'door') {
+        hotspots.push({ pos: { x, y }, heat: effectiveHeatmap[y][x] });
+      }
+    }
+  }
+
+  hotspots.sort((a, b) => b.heat - a.heat);
+
+  const topHotspots = hotspots.slice(0, Math.min(6, hotspots.length));
+
+  if (topHotspots.length === 0) {
+    const patrolRoute: Position[] = [];
+    for (let y = 1; y < height - 1; y++) {
+      for (let x = 1; x < width - 1; x++) {
+        if (tiles[y][x].type === 'floor') {
+          patrolRoute.push({ x, y });
+          if (patrolRoute.length >= 4) break;
+        }
+      }
+      if (patrolRoute.length >= 4) break;
+    }
+    return patrolRoute;
+  }
+
+  const route: Position[] = [topHotspots[0].pos];
+  const remaining = topHotspots.slice(1);
+
+  while (remaining.length > 0) {
+    const last = route[route.length - 1];
+    let nearestIdx = 0;
+    let nearestDist = Infinity;
+    for (let i = 0; i < remaining.length; i++) {
+      const dist = Math.abs(remaining[i].pos.x - last.x) + Math.abs(remaining[i].pos.y - last.y);
+      if (dist < nearestDist) {
+        nearestDist = dist;
+        nearestIdx = i;
+      }
+    }
+    route.push(remaining[nearestIdx].pos);
+    remaining.splice(nearestIdx, 1);
+  }
+
+  return route;
+}
+
+function findNextStepToward(
+  from: Position,
+  to: Position,
+  tiles: Tile[][],
+  width: number,
+  height: number
+): Position {
+  const candidates: { pos: Position; priority: number }[] = [];
+
+  const directions = [
+    { x: 0, y: -1 },
+    { x: 0, y: 1 },
+    { x: -1, y: 0 },
+    { x: 1, y: 0 },
+  ];
+
+  for (const dir of directions) {
+    const nx = from.x + dir.x;
+    const ny = from.y + dir.y;
+    if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+    const tile = tiles[ny][nx];
+    if (tile.type === 'wall' || (tile.type === 'door' && !tile.activated)) continue;
+
+    const newDist = Math.abs(nx - to.x) + Math.abs(ny - to.y);
+    candidates.push({ pos: { x: nx, y: ny }, priority: -newDist });
+  }
+
+  if (candidates.length === 0) return from;
+
+  candidates.sort((a, b) => b.priority - a.priority);
+
+  return candidates[0].pos;
+}
+
+function updateGuardianTurn(game: GameState) {
+  const guardian = game.room.guardian;
+  if (!guardian) return;
+
+  const { player, room } = game;
+  const { tiles, width, height, scentLures } = room;
+
+  guardian.turnsSinceLastRecalc++;
+
+  if (guardian.turnsSinceLastRecalc >= 8 || guardian.patrolRoute.length === 0) {
+    guardian.patrolRoute = recalculatePatrolRoute(game);
+    guardian.patrolIndex = 0;
+    guardian.turnsSinceLastRecalc = 0;
+  }
+
+  const distToPlayer = Math.abs(guardian.position.x - player.position.x) +
+    Math.abs(guardian.position.y - player.position.y);
+
+  const activeLures = scentLures.filter(l => l.turnsRemaining > 0);
+  let closestLure: ScentLure | null = null;
+  let closestLureDist = Infinity;
+  for (const lure of activeLures) {
+    const d = Math.abs(guardian.position.x - lure.position.x) +
+      Math.abs(guardian.position.y - lure.position.y);
+    if (d < closestLureDist) {
+      closestLureDist = d;
+      closestLure = lure;
+    }
+  }
+
+  const lureDetectionRange = closestLure ? closestLure.strength * 3 : 0;
+
+  switch (guardian.state) {
+    case 'patrolling': {
+      if (distToPlayer <= guardian.detectRange && isGuardianAwareOfPlayer(guardian, game)) {
+        guardian.state = 'chasing';
+        break;
+      }
+
+      if (closestLure && closestLureDist <= lureDetectionRange) {
+        guardian.state = 'investigating';
+        guardian.investigateTarget = { ...closestLure.position };
+        guardian.turnsInvestigating = 0;
+        break;
+      }
+
+      const hotspots = guardian.patrolRoute;
+      if (hotspots.length > 0) {
+        const target = hotspots[guardian.patrolIndex % hotspots.length];
+        const distToTarget = Math.abs(guardian.position.x - target.x) +
+          Math.abs(guardian.position.y - target.y);
+
+        if (distToTarget <= 1) {
+          const heatmapVal = room.playerHeatmap[target.y]?.[target.x] || 0;
+          if (heatmapVal >= 3) {
+            guardian.state = 'ambushing';
+            guardian.ambushTarget = { ...target };
+            guardian.turnsAtAmbush = 0;
+            break;
+          }
+          guardian.patrolIndex = (guardian.patrolIndex + 1) % hotspots.length;
+        }
+
+        const nextPos = findNextStepToward(guardian.position, target, tiles, width, height);
+        guardian.position = nextPos;
+      }
+      break;
+    }
+
+    case 'ambushing': {
+      guardian.turnsAtAmbush++;
+
+      if (distToPlayer <= guardian.detectRange && isGuardianAwareOfPlayer(guardian, game)) {
+        guardian.state = 'chasing';
+        break;
+      }
+
+      if (closestLure && closestLureDist <= lureDetectionRange) {
+        guardian.state = 'investigating';
+        guardian.investigateTarget = { ...closestLure.position };
+        guardian.turnsInvestigating = 0;
+        break;
+      }
+
+      if (guardian.turnsAtAmbush >= 5) {
+        guardian.state = 'patrolling';
+        guardian.patrolIndex = (guardian.patrolIndex + 1) % guardian.patrolRoute.length;
+      }
+      break;
+    }
+
+    case 'chasing': {
+      if (distToPlayer > guardian.detectRange * 2) {
+        guardian.state = 'patrolling';
+        break;
+      }
+
+      for (let step = 0; step < guardian.chaseSpeed; step++) {
+        const nextPos = findNextStepToward(guardian.position, player.position, tiles, width, height);
+        guardian.position = nextPos;
+      }
+      break;
+    }
+
+    case 'investigating': {
+      guardian.turnsInvestigating++;
+
+      if (distToPlayer <= guardian.detectRange && isGuardianAwareOfPlayer(guardian, game)) {
+        guardian.state = 'chasing';
+        break;
+      }
+
+      if (!guardian.investigateTarget || guardian.turnsInvestigating > 8) {
+        guardian.state = 'patrolling';
+        guardian.investigateTarget = null;
+        break;
+      }
+
+      const distToLure = Math.abs(guardian.position.x - guardian.investigateTarget.x) +
+        Math.abs(guardian.position.y - guardian.investigateTarget.y);
+
+      if (distToLure <= 1) {
+        guardian.investigateTarget = null;
+        guardian.state = 'patrolling';
+        guardian.turnsSinceLastRecalc = 10;
+        break;
+      }
+
+      const nextPos = findNextStepToward(guardian.position, guardian.investigateTarget, tiles, width, height);
+      guardian.position = nextPos;
+      break;
+    }
+  }
+
+  for (const lure of room.scentLures) {
+    if (lure.turnsRemaining > 0) {
+      lure.turnsRemaining--;
+    }
+  }
+  room.scentLures = room.scentLures.filter(l => l.turnsRemaining > 0);
+
+  if (guardian.position.x === player.position.x && guardian.position.y === player.position.y) {
+    const damage = 20 + Math.floor(game.player.depth * 3);
+    game.player.stamina -= damage;
+    game.message = `👹 守墓兽袭击了你！受到${damage}点伤害！`;
+
+    if (game.player.stamina <= 0) {
+      game.player.stamina = 0;
+      game.status = 'defeat';
+      game.message = '守墓兽将你撕碎...';
+    }
+
+    const fleeCandidates: Position[] = [];
+    const dirs = [{ x: 0, y: -1 }, { x: 0, y: 1 }, { x: -1, y: 0 }, { x: 1, y: 0 }];
+    for (const dir of dirs) {
+      const nx = player.position.x + dir.x;
+      const ny = player.position.y + dir.y;
+      if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+        const t = tiles[ny][nx];
+        if (t.type !== 'wall' && !(t.type === 'door' && !t.activated)) {
+          fleeCandidates.push({ x: nx, y: ny });
+        }
+      }
+    }
+    if (fleeCandidates.length > 0) {
+      player.position = fleeCandidates[Math.floor(Math.random() * fleeCandidates.length)];
+    }
+
+    guardian.state = 'patrolling';
+    guardian.patrolIndex = Math.floor(Math.random() * guardian.patrolRoute.length);
+  }
+}
+
+function isGuardianAwareOfPlayer(guardian: TombGuardian, game: GameState): boolean {
+  const { player, room } = game;
+  const tile = room.tiles[player.position.y]?.[player.position.x];
+  if (tile && tile.lit) return true;
+
+  const dist = Math.abs(guardian.position.x - player.position.x) +
+    Math.abs(guardian.position.y - player.position.y);
+  if (dist <= 2) return true;
+
+  return false;
+}
+
+export function useLure(game: GameState, itemId: string): GameState {
+  const newGame = deepClone(game);
+  const itemIndex = newGame.player.inventory.findIndex((i) => i.id === itemId);
+
+  if (itemIndex === -1) {
+    newGame.message = '找不到该物品。';
+    return newGame;
+  }
+
+  const item = newGame.player.inventory[itemIndex];
+
+  if (!item.appraised) {
+    newGame.message = '需要先鉴定文物才能作为诱饵使用。';
+    return newGame;
+  }
+
+  if (item.isGenuine !== false) {
+    newGame.message = '只有赝品文物才能制造气味诱饵，真品不会被守墓兽误判。';
+    return newGame;
+  }
+
+  if (!newGame.room.guardian) {
+    newGame.message = '这一层没有守墓兽，无需使用诱饵。';
+    return newGame;
+  }
+
+  const lure: ScentLure = {
+    id: `lure_${Date.now()}`,
+    position: { ...newGame.player.position },
+    turnsRemaining: 12 + Math.floor(Math.random() * 8),
+    strength: item.value >= 40 ? 3 : item.value >= 20 ? 2 : 1,
+    itemName: item.name,
+  };
+
+  newGame.room.scentLures.push(lure);
+  newGame.player.inventory.splice(itemIndex, 1);
+  newGame.player.weight -= item.weight;
+  newGame.player.curse = Math.max(0, newGame.player.curse - item.curseLevel);
+
+  newGame.room.guardian.turnsSinceLastRecalc = 10;
+  newGame.room.guardian.state = 'investigating';
+  newGame.room.guardian.investigateTarget = { ...lure.position };
+  newGame.room.guardian.turnsInvestigating = 0;
+
+  newGame.message = `🧴 将${item.name}碾碎制造气味诱饵！守墓兽被气味吸引，正改变巡逻路线！`;
 
   return newGame;
 }

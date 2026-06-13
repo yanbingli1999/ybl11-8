@@ -1,10 +1,11 @@
 import React from 'react';
-import { PlayerState } from '../types/game';
+import { PlayerState, TombGuardian } from '../types/game';
 
 interface StatusPanelProps {
   player: PlayerState;
   turn: number;
   status: string;
+  guardian: TombGuardian | null;
 }
 
 const StatBar: React.FC<{
@@ -58,6 +59,7 @@ export const StatusPanel: React.FC<StatusPanelProps> = ({
   player,
   turn,
   status,
+  guardian,
 }) => {
   const statusText: Record<string, string> = {
     exploring: '🔍 探索中',
@@ -142,9 +144,36 @@ export const StatusPanel: React.FC<StatusPanelProps> = ({
         <div style={{ marginBottom: '8px' }}>
           ⏱️ 回合: <strong>{turn}</strong>
         </div>
-        <div>
+        <div style={{ marginBottom: '8px' }}>
           💰 金币: <strong>{player.gold}</strong>
         </div>
+        {guardian && (
+          <div
+            style={{
+              marginTop: '12px',
+              paddingTop: '12px',
+              borderTop: '1px solid #3d3d5c',
+            }}
+          >
+            <div style={{ fontSize: '13px', fontWeight: 'bold', color: '#f87171', marginBottom: '6px' }}>
+              👹 守墓兽
+            </div>
+            <div style={{ fontSize: '12px', color: '#ccc', marginBottom: '4px' }}>
+              状态: {guardian.state === 'patrolling' ? '🔄 巡逻中' :
+                     guardian.state === 'ambushing' ? '👁️ 伏击中' :
+                     guardian.state === 'chasing' ? '⚠️ 追击中' :
+                     '🐕 侦查中'}
+            </div>
+            <div style={{ fontSize: '12px', color: '#ccc', marginBottom: '4px' }}>
+              感知范围: {guardian.detectRange}
+            </div>
+            {guardian.state === 'chasing' && (
+              <div style={{ fontSize: '12px', color: '#f87171', fontWeight: 'bold' }}>
+                ⚠️ 正在追击你！
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

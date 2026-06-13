@@ -12,6 +12,7 @@ import {
   dropItem,
   calculateEscapeValue,
   interact,
+  useLure,
 } from '../engine/gameEngine';
 import { GameBoard } from '../components/GameBoard';
 import { StatusPanel } from '../components/StatusPanel';
@@ -82,6 +83,10 @@ export const GamePage: React.FC = () => {
 
   const handleDrop = useCallback((itemId: string) => {
     setGame((prev) => dropItem(prev, itemId));
+  }, []);
+
+  const handleUseLure = useCallback((itemId: string) => {
+    setGame((prev) => useLure(prev, itemId));
   }, []);
 
   const handleInteract = useCallback(() => {
@@ -347,6 +352,7 @@ export const GamePage: React.FC = () => {
               player={game.player}
               turn={game.turn}
               status={game.status}
+              guardian={game.room.guardian}
             />
             <ControlPanel
               game={game}
@@ -382,7 +388,9 @@ export const GamePage: React.FC = () => {
             inventory={game.player.inventory}
             onAppraise={handleAppraise}
             onDrop={handleDrop}
+            onUseLure={handleUseLure}
             canAppraise={canAppraise}
+            hasGuardian={!!game.room.guardian}
           />
         </div>
 
