@@ -353,6 +353,7 @@ export const GamePage: React.FC = () => {
               turn={game.turn}
               status={game.status}
               guardian={game.room.guardian}
+              scentLures={game.room.scentLures}
             />
             <ControlPanel
               game={game}

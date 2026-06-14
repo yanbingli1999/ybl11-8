@@ -747,27 +747,63 @@ function findGuardianSpawnPos(
   entrance: Position,
   exit: Position
 ): Position {
-  const candidates: Position[] = [];
+  function isWalkable(x: number, y: number): boolean {
+    if (x < 0 || x >= width || y < 0 || y >= height) return false;
+    const t = tiles[y][x];
+    if (t.type === 'wall') return false;
+    if (t.type === 'door' && !t.activated) return false;
+    if (t.type === 'stone') return false;
+    return true;
+  }
+
+  function countReachableFloors(start: Position): number {
+    const visited: boolean[][] = Array.from({ length: height }, () => Array(width).fill(false));
+    const queue: Position[] = [start];
+    visited[start.y][start.x] = true;
+    let count = 0;
+    const dirs = [{ x: 0, y: -1 }, { x: 0, y: 1 }, { x: -1, y: 0 }, { x: 1, y: 0 }];
+    while (queue.length > 0) {
+      const cur = queue.shift()!;
+      count++;
+      for (const d of dirs) {
+        const nx = cur.x + d.x;
+        const ny = cur.y + d.y;
+        if (isWalkable(nx, ny) && !visited[ny][nx]) {
+          visited[ny][nx] = true;
+          queue.push({ x: nx, y: ny });
+        }
+      }
+    }
+    return count;
+  }
+
+  const candidates: { pos: Position; reachable: number }[] = [];
   for (let y = 1; y < height - 1; y++) {
     for (let x = 1; x < width - 1; x++) {
-      if (tiles[y][x].type === 'floor') {
+      if (isWalkable(x, y)) {
         const distToEntrance = Math.abs(x - entrance.x) + Math.abs(y - entrance.y);
         if (distToEntrance > 4) {
-          candidates.push({ x, y });
+          const reachable = countReachableFloors({ x, y });
+          candidates.push({ pos: { x, y }, reachable });
         }
       }
     }
   }
-  if (candidates.length === 0) {
-    for (let y = 1; y < height - 1; y++) {
-      for (let x = 1; x < width - 1; x++) {
-        if (tiles[y][x].type === 'floor') {
-          candidates.push({ x, y });
-        }
+  candidates.sort((a, b) => b.reachable - a.reachable);
+
+  if (candidates.length > 0) {
+    const top = candidates.filter(c => c.reachable === candidates[0].reachable);
+    return top[Math.floor(Math.random() * top.length)].pos;
+  }
+
+  for (let y = 1; y < height - 1; y++) {
+    for (let x = 1; x < width - 1; x++) {
+      if (isWalkable(x, y)) {
+        return { x, y };
       }
     }
   }
-  return candidates[Math.floor(Math.random() * candidates.length)] || { x: width - 2, y: height - 2 };
+  return { x: width - 2, y: height - 2 };
 }
 
 function updateHeatmap(game: GameState) {
@@ -777,8 +813,110 @@ function updateHeatmap(game: GameState) {
   }
 }
 
+function isGuardianWalkable(
+  tiles: Tile[][],
+  width: number,
+  height: number,
+  x: number,
+  y: number
+): boolean {
+  if (x < 0 || x >= width || y < 0 || y >= height) return false;
+  const t = tiles[y][x];
+  if (t.type === 'wall') return false;
+  if (t.type === 'door' && !t.activated) return false;
+  if (t.type === 'stone') return false;
+  return true;
+}
+
+function bfsNextStep(
+  from: Position,
+  to: Position,
+  tiles: Tile[][],
+  width: number,
+  height: number
+): Position {
+  if (from.x === to.x && from.y === to.y) return from;
+
+  const visited: (Position | null)[][] = Array.from({ length: height }, () =>
+    Array(width).fill(null)
+  );
+  const dirs = [
+    { x: 0, y: -1 },
+    { x: 0, y: 1 },
+    { x: -1, y: 0 },
+    { x: 1, y: 0 },
+  ];
+
+  const queue: Position[] = [from];
+  visited[from.y][from.x] = { x: -1, y: -1 };
+
+  let found = false;
+  while (queue.length > 0) {
+    const cur = queue.shift()!;
+    if (cur.x === to.x && cur.y === to.y) {
+      found = true;
+      break;
+    }
+    for (const d of dirs) {
+      const nx = cur.x + d.x;
+      const ny = cur.y + d.y;
+      if (!isGuardianWalkable(tiles, width, height, nx, ny)) continue;
+      if (visited[ny][nx]) continue;
+      visited[ny][nx] = { x: cur.x, y: cur.y };
+      queue.push({ x: nx, y: ny });
+    }
+  }
+
+  if (!found) return from;
+
+  let cur = to;
+  while (true) {
+    const parent = visited[cur.y][cur.x];
+    if (!parent) return from;
+    if (parent.x === from.x && parent.y === from.y) return cur;
+    cur = parent;
+  }
+}
+
+function bfsDistance(
+  from: Position,
+  to: Position,
+  tiles: Tile[][],
+  width: number,
+  height: number
+): number {
+  if (from.x === to.x && from.y === to.y) return 0;
+
+  const dist: number[][] = Array.from({ length: height }, () =>
+    Array(width).fill(-1)
+  );
+  const dirs = [
+    { x: 0, y: -1 },
+    { x: 0, y: 1 },
+    { x: -1, y: 0 },
+    { x: 1, y: 0 },
+  ];
+
+  const queue: Position[] = [from];
+  dist[from.y][from.x] = 0;
+
+  while (queue.length > 0) {
+    const cur = queue.shift()!;
+    if (cur.x === to.x && cur.y === to.y) return dist[cur.y][cur.x];
+    for (const d of dirs) {
+      const nx = cur.x + d.x;
+      const ny = cur.y + d.y;
+      if (!isGuardianWalkable(tiles, width, height, nx, ny)) continue;
+      if (dist[ny][nx] !== -1) continue;
+      dist[ny][nx] = dist[cur.y][cur.x] + 1;
+      queue.push({ x: nx, y: ny });
+    }
+  }
+  return -1;
+}
+
 function recalculatePatrolRoute(game: GameState): Position[] {
-  const { playerHeatmap, width, height, tiles, scentLures } = game.room;
+  const { playerHeatmap, width, height, tiles, scentLures, guardian } = game.room;
   const effectiveHeatmap: number[][] = playerHeatmap.map(row => [...row]);
 
   for (const lure of scentLures) {
@@ -809,15 +947,27 @@ function recalculatePatrolRoute(game: GameState): Position[] {
 
   hotspots.sort((a, b) => b.heat - a.heat);
 
-  const topHotspots = hotspots.slice(0, Math.min(6, hotspots.length));
+  const startPos = guardian ? guardian.position : { x: 1, y: 1 };
 
-  if (topHotspots.length === 0) {
+  const reachableHotspots: { pos: Position; heat: number; dist: number }[] = [];
+  for (const h of hotspots) {
+    const d = bfsDistance(startPos, h.pos, tiles, width, height);
+    if (d >= 0) {
+      reachableHotspots.push({ pos: h.pos, heat: h.heat, dist: d });
+    }
+    if (reachableHotspots.length >= 12) break;
+  }
+
+  if (reachableHotspots.length === 0) {
     const patrolRoute: Position[] = [];
     for (let y = 1; y < height - 1; y++) {
       for (let x = 1; x < width - 1; x++) {
-        if (tiles[y][x].type === 'floor') {
-          patrolRoute.push({ x, y });
-          if (patrolRoute.length >= 4) break;
+        if (isGuardianWalkable(tiles, width, height, x, y)) {
+          const d = bfsDistance(startPos, { x, y }, tiles, width, height);
+          if (d >= 0) {
+            patrolRoute.push({ x, y });
+            if (patrolRoute.length >= 4) break;
+          }
         }
       }
       if (patrolRoute.length >= 4) break;
@@ -825,25 +975,31 @@ function recalculatePatrolRoute(game: GameState): Position[] {
     return patrolRoute;
   }
 
-  const route: Position[] = [topHotspots[0].pos];
-  const remaining = topHotspots.slice(1);
+  const seed = reachableHotspots[0].pos;
+  const selected: Position[] = [seed];
+  const maxCount = Math.min(6, reachableHotspots.length);
+  let candidates = reachableHotspots.slice(1);
 
-  while (remaining.length > 0) {
-    const last = route[route.length - 1];
-    let nearestIdx = 0;
-    let nearestDist = Infinity;
-    for (let i = 0; i < remaining.length; i++) {
-      const dist = Math.abs(remaining[i].pos.x - last.x) + Math.abs(remaining[i].pos.y - last.y);
-      if (dist < nearestDist) {
-        nearestDist = dist;
-        nearestIdx = i;
+  while (selected.length < maxCount && candidates.length > 0) {
+    const last = selected[selected.length - 1];
+    let bestIdx = -1;
+    let bestDist = Infinity;
+    for (let i = 0; i < candidates.length; i++) {
+      const d = bfsDistance(last, candidates[i].pos, tiles, width, height);
+      if (d >= 0 && d < bestDist) {
+        bestDist = d;
+        bestIdx = i;
       }
     }
-    route.push(remaining[nearestIdx].pos);
-    remaining.splice(nearestIdx, 1);
+    if (bestIdx >= 0) {
+      selected.push(candidates[bestIdx].pos);
+      candidates.splice(bestIdx, 1);
+    } else {
+      break;
+    }
   }
 
-  return route;
+  return selected;
 }
 
 function findNextStepToward(
@@ -853,31 +1009,7 @@ function findNextStepToward(
   width: number,
   height: number
 ): Position {
-  const candidates: { pos: Position; priority: number }[] = [];
-
-  const directions = [
-    { x: 0, y: -1 },
-    { x: 0, y: 1 },
-    { x: -1, y: 0 },
-    { x: 1, y: 0 },
-  ];
-
-  for (const dir of directions) {
-    const nx = from.x + dir.x;
-    const ny = from.y + dir.y;
-    if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
-    const tile = tiles[ny][nx];
-    if (tile.type === 'wall' || (tile.type === 'door' && !tile.activated)) continue;
-
-    const newDist = Math.abs(nx - to.x) + Math.abs(ny - to.y);
-    candidates.push({ pos: { x: nx, y: ny }, priority: -newDist });
-  }
-
-  if (candidates.length === 0) return from;
-
-  candidates.sort((a, b) => b.priority - a.priority);
-
-  return candidates[0].pos;
+  return bfsNextStep(from, to, tiles, width, height);
 }
 
 function updateGuardianTurn(game: GameState) {
@@ -886,6 +1018,7 @@ function updateGuardianTurn(game: GameState) {
 
   const { player, room } = game;
   const { tiles, width, height, scentLures } = room;
+  const prevState = guardian.state;
 
   guardian.turnsSinceLastRecalc++;
 
@@ -893,6 +1026,9 @@ function updateGuardianTurn(game: GameState) {
     guardian.patrolRoute = recalculatePatrolRoute(game);
     guardian.patrolIndex = 0;
     guardian.turnsSinceLastRecalc = 0;
+    if (guardian.visible && scentLures.length > 0) {
+      game.message = '🐕 守墓兽重新规划巡逻，似乎被气味吸引了方向…';
+    }
   }
 
   const distToPlayer = Math.abs(guardian.position.x - player.position.x) +
@@ -916,6 +1052,9 @@ function updateGuardianTurn(game: GameState) {
     case 'patrolling': {
       if (distToPlayer <= guardian.detectRange && isGuardianAwareOfPlayer(guardian, game)) {
         guardian.state = 'chasing';
+        if (guardian.visible) {
+          game.message = '⚠️ 守墓兽发现了你！正朝你奔来！';
+        }
         break;
       }
 
@@ -923,6 +1062,9 @@ function updateGuardianTurn(game: GameState) {
         guardian.state = 'investigating';
         guardian.investigateTarget = { ...closestLure.position };
         guardian.turnsInvestigating = 0;
+        if (guardian.visible) {
+          game.message = `🐕 守墓兽嗅到了${closestLure.itemName}的气味，改变方向前去侦查！`;
+        }
         break;
       }
 
@@ -938,6 +1080,9 @@ function updateGuardianTurn(game: GameState) {
             guardian.state = 'ambushing';
             guardian.ambushTarget = { ...target };
             guardian.turnsAtAmbush = 0;
+            if (guardian.visible) {
+              game.message = '👁️ 守墓兽在玩家常走的格子停下，似乎埋伏了起来…';
+            }
             break;
           }
           guardian.patrolIndex = (guardian.patrolIndex + 1) % hotspots.length;
@@ -954,6 +1099,9 @@ function updateGuardianTurn(game: GameState) {
 
       if (distToPlayer <= guardian.detectRange && isGuardianAwareOfPlayer(guardian, game)) {
         guardian.state = 'chasing';
+        if (guardian.visible) {
+          game.message = '⚠️ 埋伏的守墓兽发现了你！扑了过来！';
+        }
         break;
       }
 
@@ -961,6 +1109,9 @@ function updateGuardianTurn(game: GameState) {
         guardian.state = 'investigating';
         guardian.investigateTarget = { ...closestLure.position };
         guardian.turnsInvestigating = 0;
+        if (guardian.visible) {
+          game.message = `🐕 守墓兽放弃伏击，被${closestLure.itemName}的气味吸引去侦查！`;
+        }
         break;
       }
 
@@ -974,6 +1125,9 @@ function updateGuardianTurn(game: GameState) {
     case 'chasing': {
       if (distToPlayer > guardian.detectRange * 2) {
         guardian.state = 'patrolling';
+        if (guardian.visible) {
+          game.message = '守墓兽失去了你的踪迹，恢复了巡逻。';
+        }
         break;
       }
 
@@ -989,6 +1143,9 @@ function updateGuardianTurn(game: GameState) {
 
       if (distToPlayer <= guardian.detectRange && isGuardianAwareOfPlayer(guardian, game)) {
         guardian.state = 'chasing';
+        if (guardian.visible) {
+          game.message = '⚠️ 侦查中的守墓兽转头发现了你！';
+        }
         break;
       }
 
@@ -1005,6 +1162,9 @@ function updateGuardianTurn(game: GameState) {
         guardian.investigateTarget = null;
         guardian.state = 'patrolling';
         guardian.turnsSinceLastRecalc = 10;
+        if (guardian.visible) {
+          game.message = '🐕 守墓兽抵达气味源，没发现猎物，继续巡逻。';
+        }
         break;
       }
 
@@ -1017,6 +1177,9 @@ function updateGuardianTurn(game: GameState) {
   for (const lure of room.scentLures) {
     if (lure.turnsRemaining > 0) {
       lure.turnsRemaining--;
+      if (lure.turnsRemaining === 3 && guardian.visible) {
+        game.message = `🧴 ${lure.itemName}诱饵气味即将消散，还剩 3 回合！`;
+      }
     }
   }
   room.scentLures = room.scentLures.filter(l => l.turnsRemaining > 0);
@@ -1051,6 +1214,8 @@ function updateGuardianTurn(game: GameState) {
     guardian.state = 'patrolling';
     guardian.patrolIndex = Math.floor(Math.random() * guardian.patrolRoute.length);
   }
+
+  void prevState;
 }
 
 function isGuardianAwareOfPlayer(guardian: TombGuardian, game: GameState): boolean {
@@ -1091,11 +1256,13 @@ export function useLure(game: GameState, itemId: string): GameState {
     return newGame;
   }
 
+  const turns = 12 + Math.floor(Math.random() * 8);
+  const strength = item.value >= 40 ? 3 : item.value >= 20 ? 2 : 1;
   const lure: ScentLure = {
     id: `lure_${Date.now()}`,
     position: { ...newGame.player.position },
-    turnsRemaining: 12 + Math.floor(Math.random() * 8),
-    strength: item.value >= 40 ? 3 : item.value >= 20 ? 2 : 1,
+    turnsRemaining: turns,
+    strength,
     itemName: item.name,
   };
 
@@ -1109,7 +1276,8 @@ export function useLure(game: GameState, itemId: string): GameState {
   newGame.room.guardian.investigateTarget = { ...lure.position };
   newGame.room.guardian.turnsInvestigating = 0;
 
-  newGame.message = `🧴 将${item.name}碾碎制造气味诱饵！守墓兽被气味吸引，正改变巡逻路线！`;
+  const strengthDesc = strength >= 3 ? '强烈' : strength >= 2 ? '中等' : '微弱';
+  newGame.message = `🧴 将${item.name}碾碎制造气味诱饵！【强度:${strengthDesc}｜半径${Math.ceil(strength)}格｜持续${turns}回合】守墓兽正改变巡逻路线，前去侦查！`;
 
   return newGame;
 }

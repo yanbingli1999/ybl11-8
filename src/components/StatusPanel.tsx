@@ -1,11 +1,12 @@
 import React from 'react';
-import { PlayerState, TombGuardian } from '../types/game';
+import { PlayerState, TombGuardian, ScentLure } from '../types/game';
 
 interface StatusPanelProps {
   player: PlayerState;
   turn: number;
   status: string;
   guardian: TombGuardian | null;
+  scentLures: ScentLure[];
 }
 
 const StatBar: React.FC<{
@@ -60,6 +61,7 @@ export const StatusPanel: React.FC<StatusPanelProps> = ({
   turn,
   status,
   guardian,
+  scentLures,
 }) => {
   const statusText: Record<string, string> = {
     exploring: '🔍 探索中',
@@ -172,6 +174,43 @@ export const StatusPanel: React.FC<StatusPanelProps> = ({
                 ⚠️ 正在追击你！
               </div>
             )}
+          </div>
+        )}
+        {scentLures.filter(l => l.turnsRemaining > 0).length > 0 && (
+          <div
+            style={{
+              marginTop: '12px',
+              paddingTop: '12px',
+              borderTop: '1px solid #3d3d5c',
+            }}
+          >
+            <div style={{ fontSize: '13px', fontWeight: 'bold', color: '#a855f7', marginBottom: '6px' }}>
+              🧴 气味诱饵
+            </div>
+            {scentLures.filter(l => l.turnsRemaining > 0).map((lure, idx) => {
+              const strengthDesc = lure.strength >= 3 ? '💜 强烈' : lure.strength >= 2 ? '💟 中等' : '♪ 微弱';
+              return (
+                <div
+                  key={lure.id}
+                  style={{
+                    fontSize: '11px',
+                    color: '#ccc',
+                    marginBottom: '4px',
+                    padding: '4px 6px',
+                    backgroundColor: '#1a1a2e',
+                    borderRadius: '4px',
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>🧴 {lure.itemName}</span>
+                    <span>{strengthDesc}</span>
+                  </div>
+                  <div style={{ color: '#999', marginTop: '2px' }}>
+                    坐标({lure.position.x},{lure.position.y})｜⏱️{lure.turnsRemaining}回合
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
